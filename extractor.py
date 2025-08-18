@@ -28,7 +28,7 @@ def find_il(norm: str) -> str:
 def find_ilce(norm: str, il: str) -> str:
     base = re.sub(r"\([^)]*\)", " ", norm)
 
-    # 1) Slash kalıbı: tüm eşleşmeleri tara, sağ tarafı il olan son eşleşmeyi seç
+    # 1) 'ilçe/il' kalıbı: sağ tarafı IL olan son eşleşmeyi seç
     cand = ""
     for m in re.finditer(r"\b([a-zçğıöşü\.\- ]+?)\s*/\s*([a-zçğıöşü\.\- ]+)\b", base):
         left_raw  = m.group(1).strip()
@@ -38,32 +38,24 @@ def find_ilce(norm: str, il: str) -> str:
             if left_tokens:
                 last_left = left_tokens[-1].title()
                 if not is_il_token(last_left):
-                    cand = last_left  # son geçerli slash ilçe adayı
+                    cand = last_left
     if cand:
         return cand
 
-    # 2) İl bulunduysa: metindeki TÜM il tokenlarını bul, sondakinden 1–3 token sola bak ve son anlamlıyı al
+    # 2) İl bulunduysa: 'il' kelimesinden 1–3 token sola bak, en yakını al
     if il:
         parts = base.split()
         il_norm = clean_token(il).lower()
-        idxs = [i for i,t in enumerate(parts) if is_il_token(t)]
+        idxs = [i for i, t in enumerate(parts) if is_il_token(t)]
         for idx in reversed(idxs):
-            # aynı il mi? (örn 'İzmir' ile eşleşsin)
             if clean_token(parts[idx]).lower() != il_norm:
                 continue
-            window = []
             j = idx - 1
-            while j >= 0 and len(window) < 3:
+            while j >= 0:
                 ct = clean_token(parts[j])
-                if not ct or ct.isdigit() or is_il_token(ct) or ct in STOPWORDS_BACK:
-                    j -= 1
-                    continue
-                window.append(ct.title())
+                if ct and not ct.isdigit() and not is_il_token(ct) and ct not in STOPWORDS_BACK:
+                    return ct.title()
                 j -= 1
-            if window:
-                last_tok = window[0]  # en yakın anlamlı token
-                if not is_il_token(last_tok):
-                    return last_tok
     return ""
 
 def extract_anchor_phrase(norm: str, anchor: str) -> str:

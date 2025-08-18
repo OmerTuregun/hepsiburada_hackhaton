@@ -28,7 +28,7 @@ ABBR_MAP: List[Tuple[str,str]] = [
 def normalize(text: str) -> str:
     t = tr_lower(text or "")
     # Ayırıcıları sadeleştir
-    t = re.sub(r"[/,;|]+", " ", t)
+    t = re.sub(r"[;,|]+", " ", t)
 
     # Kısaltma genişlet
     for pat, repl in ABBR_MAP:
