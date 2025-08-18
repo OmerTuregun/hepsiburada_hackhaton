@@ -53,8 +53,11 @@ def parse_address(raw: str) -> Parsed:
         out.sokak = out.sokak + "."
 
     # Site/Apartman: 'no/sokak/cadde' artıkları ve sayısal kuyrukları temizle
-    out.site = clean_place_name(out.site)
-    out.apartman = clean_place_name(out.apartman)
+    if out.site:
+        out.site = clean_place_name(out.site)
+    if out.apartman:
+        out.apartman = clean_place_name(out.apartman)
+
 
     # Mahalleden il/ilçe tamamlama (sözlük tabakası)
     if out.mahalle and (not out.ilce or not out.il):

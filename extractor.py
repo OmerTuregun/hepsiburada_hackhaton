@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import re
-from utils import ILLER, ANCHOR_WORDS, STOPWORDS_BACK, clean_token, is_stop, unique_collapse
+from utils import ILLER, ANCHOR_WORDS, STOPWORDS_BACK, clean_token, is_stop, unique_collapse, is_il_token
 
 # Regexler
 RE_NO    = re.compile(r"\bno\s*([0-9]+(?:/[0-9a-z]+)?|[0-9]+[a-z]?)\b", re.I)
@@ -9,7 +9,7 @@ RE_KAT_K = re.compile(r"\bk\s*[:\.]?\s*([0-9]+)\b", re.I)
 RE_DAIRE = re.compile(r"\bd\s*([0-9]+[a-z]?)\b", re.I)
 RE_BLOK  = re.compile(r"\b([a-zçğıöşü]{1,2})\s*blok\b", re.I)
 RE_SITE  = re.compile(r"\b([a-zçğıöşü0-9\s\-]+?)\s+sitesi\b", re.I)
-RE_APT   = re.compile(r"\b([a-zçğıöşü0-9\s\-]+?)\s+apartman(?:ı|i)?\b", re.I)
+RE_APT = re.compile(r"\b([a-zçğıöşü0-9\s\-]+?)\s+apartman(?:ı|i)?\b", re.I)
 RE_MAH = re.compile(
     r"\b([a-zçğıöşü0-9\.\-]+(?:\s+[a-zçğıöşü0-9\.\-]+)*)\s+mahallesi\b",
     re.I
@@ -18,54 +18,53 @@ RE_MAH = re.compile(
 def find_il(norm: str) -> str:
     tokens = norm.split()
     for tok in reversed(tokens):
-        ct = clean_token(tok)
-        if ct in ILLER:
+        if is_il_token(tok):
+            # Kullanıcıya TitleCase döndürürken aksanını koruyamayabiliriz;
+            # en azından stringi normalize edip ilk harf büyük yapalım.
+            ct = clean_token(tok)
             return ct.title()
     return ""
 
 def find_ilce(norm: str, il: str) -> str:
-    # parantez içini at
     base = re.sub(r"\([^)]*\)", " ", norm)
 
-    # 1) "<ilçe>/<il>" ya da "<ilçe> / <il>"
-    m = re.search(r"\b([a-zçğıöşü\-\. ]+?)\s*/\s*([a-zçığıöşü\-\. ]+)\b", base)
-    if m:
-        left_raw = m.group(1).strip()
-        right = clean_token(m.group(2)).title().strip()
-        if right.lower() in ILLER:
+    # 1) Slash kalıbı: tüm eşleşmeleri tara, sağ tarafı il olan son eşleşmeyi seç
+    cand = ""
+    for m in re.finditer(r"\b([a-zçğıöşü\.\- ]+?)\s*/\s*([a-zçğıöşü\.\- ]+)\b", base):
+        left_raw  = m.group(1).strip()
+        right_raw = m.group(2).strip()
+        if is_il_token(right_raw):
             left_tokens = [clean_token(x) for x in left_raw.split() if clean_token(x)]
             if left_tokens:
-                last_left = left_tokens[-1].title()              # <- SOLDAN SON TOKEN
-                if last_left.lower() != right.lower():
-                    return last_left
+                last_left = left_tokens[-1].title()
+                if not is_il_token(last_left):
+                    cand = last_left  # son geçerli slash ilçe adayı
+    if cand:
+        return cand
 
-    # 2) İl bulunduysa: il'in hemen öncesinden yalnızca **son** tokenı al
+    # 2) İl bulunduysa: metindeki TÜM il tokenlarını bul, sondakinden 1–3 token sola bak ve son anlamlıyı al
     if il:
         parts = base.split()
-        il_l = il.lower()
-        idx = -1
-        for i, t in enumerate(parts):
-            if clean_token(t) == il_l:
-                idx = i
-        if idx != -1:
+        il_norm = clean_token(il).lower()
+        idxs = [i for i,t in enumerate(parts) if is_il_token(t)]
+        for idx in reversed(idxs):
+            # aynı il mi? (örn 'İzmir' ile eşleşsin)
+            if clean_token(parts[idx]).lower() != il_norm:
+                continue
             window = []
             j = idx - 1
-            # stopword/iller/sayı gelene kadar geriye yürü (max 3 token topla)
             while j >= 0 and len(window) < 3:
-                tok = parts[j]
-                ct = clean_token(tok)
-                if not ct or ct.isdigit() or ct in ILLER or ct in STOPWORDS_BACK:
-                    break
+                ct = clean_token(parts[j])
+                if not ct or ct.isdigit() or is_il_token(ct) or ct in STOPWORDS_BACK:
+                    j -= 1
+                    continue
                 window.append(ct.title())
                 j -= 1
-            window.reverse()
             if window:
-                # YALNIZCA SAĞDAKİ (SON) TOKENI İLÇE AL
-                last_tok = window[-1]
-                if last_tok.lower() != il_l:
+                last_tok = window[0]  # en yakın anlamlı token
+                if not is_il_token(last_tok):
                     return last_tok
     return ""
-
 
 def extract_anchor_phrase(norm: str, anchor: str) -> str:
     tokens = norm.split()
@@ -105,21 +104,27 @@ def prune_street_phrase(phrase: str) -> str:
 
 PLACE_STOP = {"no","sokak","caddesi","cadde","bulvarı","blok","d","kat"}
 
+PLACE_STOP = {"no","sokak","caddesi","cadde","bulvarı","blok","d","kat"}
+
 def clean_place_name(s: str) -> str:
-    if not s: return s
+    if not s: 
+        return s
     parts = s.split()
     out = []
-    for p in parts:
+    # sağdan sola ilerle, ilk 1–3 anlamlı kelimeyi al
+    for p in reversed(parts):
         cp = clean_token(p)
         if not cp or cp.isdigit() or cp in PLACE_STOP:
-            break  # bu ve sonrasını at
+            if out:  # bir şey topladıysak, burada kes
+                break
+            else:
+                continue
         out.append(p)
-    name = " ".join(out).strip()
-    # çok uzun kaçtıysa son 2-3 kelimeyi tut
-    tokens = name.split()
-    if len(tokens) > 3:
-        tokens = tokens[-3:]
-    return " ".join(tokens).title()
+        if len(out) >= 3:
+            break
+    out.reverse()
+    return " ".join(out).title()
+
 
 MAH_TAIL_NOISE = {"sitesi","site","sanayi","osb","organize"}
 MAH_TWO_TOKEN_WHITELIST = {("yeni","sanayi"), ("eski","sanayi")}

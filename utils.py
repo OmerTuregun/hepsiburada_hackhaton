@@ -51,6 +51,24 @@ def levenshtein(a: str, b: str) -> int:
         prev = cur
     return prev[-1]
 
+TR_FOLD_MAP = str.maketrans("çğıöşü", "cgiosu")
+
+def fold_tr(s: str) -> str:
+    # önce mevcut clean_token filtresi ile sadeleştir, sonra aksanı kaldır
+    from utils import clean_token as _ct  # circular import riskini önlemek için local import kullanma!
+    # DİKKAT: burada utils.clean_token çağırmayalım; aynı dosyadayız.
+    # Bu yüzden aşağıdaki satırı düzenleyelim:
+    s2 = (s or "")
+    s2 = s2.translate(str.maketrans("IİÇĞÖŞÜ", "ıiçğöşü")).lower()
+    s2 = re.sub(r"[^\wçğıöşü]+", "", s2)  # clean_token ile aynı filtre
+    return s2.translate(TR_FOLD_MAP)
+
+# İllerin aksansız versiyon seti
+ILLER_FOLDED = { fold_tr(x) for x in ILLER }
+
+def is_il_token(tok: str) -> bool:
+    return fold_tr(tok) in ILLER_FOLDED
+
 @dataclass
 class Parsed:
     normalized: str
