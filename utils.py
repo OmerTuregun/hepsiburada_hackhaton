@@ -15,10 +15,25 @@ ILLER: Set[str] = {
     "bayburt","karaman","kirikkale","batman","sirnak","bartin","ardahan","igdir","yalova","karabuk",
     "kilis","osmaniye","duzce"
 }
-ANCHOR_WORDS = {"sokak","caddesi","bulvarı"}
+ANCHOR_WORDS = {
+    "mahalle":  {"mahallesi", "mah", "mh", "m"},
+    "sokak":    {"sokak", "sok", "sk"},
+    "cadde":    {"caddesi", "cadde", "cad", "cd"},
+    "bulvar":   {"bulvarı", "bulvar", "blv", "bulv"},
+    "site":     {"sitesi", "site"},
+    "apartman": {"apartmanı", "apartman", "apt", "ap"},
+    "blok":     {"blok"},
+}
+ANCHOR_TOKENS = set(ANCHOR_WORDS.keys()) | {t for vals in ANCHOR_WORDS.values() for t in vals}
+
 STOPWORDS_BACK = {
-    "mahallesi","no","kat","k","d","blok","sitesi","apartmanı","apt","daire"
-} | ANCHOR_WORDS | ILLER
+    "mahallesi","mah","mh","m",
+    "sokak","sk","sok",
+    "caddesi","cadde","cad","cd",
+    "bulvarı","bulvar","blv","bulv",
+    "blok","site","sitesi","apartmanı","apartman",
+    "no","kat","d","k"
+} | ANCHOR_TOKENS | ILLER
 
 # ---- Yardımcılar ----
 def tr_lower(s: str) -> str:
@@ -53,15 +68,12 @@ def levenshtein(a: str, b: str) -> int:
 
 TR_FOLD_MAP = str.maketrans("çğıöşü", "cgiosu")
 
+TR_FOLD_MAP = str.maketrans("çğıöşü", "cgiosu")
+
 def fold_tr(s: str) -> str:
-    # önce mevcut clean_token filtresi ile sadeleştir, sonra aksanı kaldır
-    from utils import clean_token as _ct  # circular import riskini önlemek için local import kullanma!
-    # DİKKAT: burada utils.clean_token çağırmayalım; aynı dosyadayız.
-    # Bu yüzden aşağıdaki satırı düzenleyelim:
-    s2 = (s or "")
-    s2 = s2.translate(str.maketrans("IİÇĞÖŞÜ", "ıiçğöşü")).lower()
-    s2 = re.sub(r"[^\wçğıöşü]+", "", s2)  # clean_token ile aynı filtre
-    return s2.translate(TR_FOLD_MAP)
+    # clean_token -> aksanı kaldır
+    return clean_token(s).translate(TR_FOLD_MAP)
+
 
 # İllerin aksansız versiyon seti
 ILLER_FOLDED = { fold_tr(x) for x in ILLER }

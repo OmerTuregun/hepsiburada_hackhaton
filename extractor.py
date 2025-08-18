@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import re
 from utils import ILLER, ANCHOR_WORDS, STOPWORDS_BACK, clean_token, is_stop, unique_collapse, is_il_token
+from normalizer import normalize_text
 
 # Regexler
 RE_NO    = re.compile(r"\bno\s*([0-9]+(?:/[0-9a-z]+)?|[0-9]+[a-z]?)\b", re.I)
@@ -15,6 +16,13 @@ RE_MAH = re.compile(
     re.I
 )
 
+# Gürültü (POI) kelimeleri: ilçe fallback'te atlanacak
+POI_NOISE = {
+    "foto", "fotograf", "işhanı", "ishanı", "market", "eczane", "ofis",
+    "oto", "otomotiv", "sanayi", "sitesi", "site", "apt", "apartman",
+    "blok"
+}
+
 def find_il(norm: str) -> str:
     tokens = norm.split()
     for tok in reversed(tokens):
@@ -27,34 +35,59 @@ def find_il(norm: str) -> str:
 def find_ilce(norm: str, il: str) -> str:
     base = re.sub(r"\([^)]*\)", " ", norm)
 
-    # 1) 'ilçe/il' kalıbı: sağ tarafı IL olan son eşleşmeyi seç
+    # 0) Token bazlı hızlı tarama: "X/Y" veya "X / Y"
+    parts = base.split()
+    # a) Tek token içinde slash: "fethiye/muğla"
+    for tok in reversed(parts):
+        if "/" in tok:
+            left, _, right = tok.rpartition("/")
+            if is_il_token(right):
+                lt = [clean_token(x) for x in left.split() if clean_token(x)]
+                if lt:
+                    cand = lt[-1].title()
+                    if cand and not is_il_token(cand):
+                        return cand
+    # b) Ayrı token olarak slash: "... dikili / izmir ..."
+    for i in range(1, len(parts)-1):
+        if parts[i] == "/" and is_il_token(parts[i+1]):
+            left = clean_token(parts[i-1])
+            if left and not is_il_token(left):
+                return left.title()
+
+    # 1) Regex ile genel tarama (çeşitli boşluk varyantları)
     cand = ""
-    for m in re.finditer(r"\b([a-zçğıöşü\.\- ]+?)\s*/\s*([a-zçğıöşü\.\- ]+)\b", base, flags=re.I):
+    pattern = r"([A-Za-zÇĞİÖŞÜçğıöşü0-9\.\- ]+?)\s*/\s*([A-Za-zÇĞİÖŞÜçğıöşü0-9\.\- ]+)"
+    for m in re.finditer(pattern, base):
         left_raw  = m.group(1).strip()
         right_raw = m.group(2).strip()
         if is_il_token(right_raw):
-            left_tokens = [clean_token(x) for x in left_raw.split() if clean_token(x)]
-            if left_tokens:
-                last_left = left_tokens[-1].title()
+            ltoks = [clean_token(x) for x in left_raw.split() if clean_token(x)]
+            if ltoks:
+                last_left = ltoks[-1].title()
                 if not is_il_token(last_left):
                     cand = last_left
     if cand:
         return cand
 
-    # 2) İl bulunduysa: sondaki il tokenından sola doğru en yakın anlamlı kelimeyi al
+    # 2) Fallback: sonda bulunan 'İl' tokenından sola yürü
     if il:
-        parts   = base.split()
         il_norm = clean_token(il).lower()
-        idxs = [i for i, t in enumerate(parts) if is_il_token(t)]
-        for idx in reversed(idxs):
-            if clean_token(parts[idx]).lower() != il_norm:
-                continue
-            j = idx - 1
-            while j >= 0:
-                ct = clean_token(parts[j])
-                if ct and not ct.isdigit() and not is_il_token(ct) and ct not in STOPWORDS_BACK:
-                    return ct.title()  # örn. ... Konak İzmir -> Konak
-                j -= 1
+        for idx in reversed(range(len(parts))):
+            if is_il_token(parts[idx]) and clean_token(parts[idx]).lower() == il_norm:
+                j = idx - 1
+                while j >= 0:
+                    raw = parts[j]
+                    ct  = clean_token(raw)
+                    prev = clean_token(parts[j-1]) if j-1 >= 0 else ""
+                    if ct and not ct.isdigit() and not is_il_token(ct) and ct not in STOPWORDS_BACK and ct not in POI_NOISE and prev not in POI_NOISE:
+                        # "fethiye/muğla" gibi burada da yakalayalım
+                        if "/" in raw:
+                            subs = [clean_token(s) for s in raw.split("/")]
+                            for sub in reversed(subs):
+                                if sub and not is_il_token(sub) and sub not in STOPWORDS_BACK and sub not in POI_NOISE:
+                                    return sub.title()
+                        return ct.title()
+                    j -= 1
     return ""
 
 def extract_anchor_phrase(norm: str, anchor: str) -> str:
@@ -92,8 +125,6 @@ def prune_street_phrase(phrase: str) -> str:
         return nums[-1] + ("" if nums[-1].endswith(".") else ".")
     # yoksa olduğu gibi
     return " ".join(toks)
-
-PLACE_STOP = {"no","sokak","caddesi","cadde","bulvarı","blok","d","kat"}
 
 PLACE_STOP = {"no","sokak","caddesi","cadde","bulvarı","blok","d","kat"}
 
@@ -147,3 +178,81 @@ def trim_mahalle_tail(name: str) -> str:
         return " ".join(toks[-2:]).title()
     return " ".join(toks).title()
 
+def parse_address(text: str) -> dict:
+    """
+    CLI'nin beklediği arayüz:
+    Girdi: ham adres (str)
+    Çıktı: {
+      'address','normalized','il','ilce','mahalle','sokak','cadde','bulvar',
+      'no','kat','daire','blok','site','apartman'
+    }
+    """
+    raw = (text or "").strip()
+    norm = normalize_text(raw)
+
+    out = {
+        "address": raw,
+        "normalized": norm,
+        "il": "",
+        "ilce": "",
+        "mahalle": "",
+        "sokak": "",
+        "cadde": "",
+        "bulvar": "",
+        "no": "",
+        "kat": "",
+        "daire": "",
+        "blok": "",
+        "site": "",
+        "apartman": "",
+    }
+
+    # --- Temel sayısal alanlar ---
+    m = RE_NO.search(norm)
+    if m: out["no"] = m.group(1).lower()
+
+    m = RE_KAT.search(norm) or RE_KAT_K.search(norm)
+    if m: out["kat"] = m.group(1)
+
+    m = RE_DAIRE.search(norm)
+    if m: out["daire"] = m.group(1).lower()
+
+    m = RE_BLOK.search(norm)
+    if m: out["blok"] = m.group(1).lower()
+
+    m = RE_SITE.search(norm)
+    if m:
+        # "xxx sitesi" öncesini alıyoruz
+        out["site"] = clean_place_name(m.group(1)).title()
+
+    m = RE_APT.search(norm)
+    if m:
+        out["apartman"] = clean_place_name(m.group(1)).title()
+
+    # --- Mahalle ---
+    m = RE_MAH.search(norm)
+    if m:
+        out["mahalle"] = trim_mahalle_tail(m.group(1)).title()
+
+    # --- Cadde / Sokak / Bulvar (anchor bazlı) ---
+    # utils.ANCHOR_WORDS beklenen ör.: {"cadde": ["caddesi","cadde","cad.","cd."], "sokak": [...], "bulvar": [...]}
+    for canon, anchors in ANCHOR_WORDS.items():
+        for a in anchors:
+            phrase = extract_anchor_phrase(norm, a)
+            if not phrase:
+                continue
+            if canon == "sokak":
+                out["sokak"] = prune_street_phrase(phrase)
+            elif canon == "cadde":
+                out["cadde"] = clean_place_name(phrase).title()
+            elif canon == "bulvar":
+                out["bulvar"] = clean_place_name(phrase).title()
+            # aynı tür için ilk sağlam eşleşmede dur
+            if out[canon]:
+                break
+
+    # --- İl / İlçe ---
+    out["il"] = find_il(norm)
+    out["ilce"] = find_ilce(norm, out["il"])
+
+    return out

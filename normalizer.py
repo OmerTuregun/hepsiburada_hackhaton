@@ -58,3 +58,23 @@ def normalize(text: str) -> str:
     # boşluk temizle
     t = re.sub(r"\s+", " ", t).strip()
     return t
+
+# Tek tip boşluk
+_SPACE_RE = re.compile(r"\s+")
+
+def normalize_text(s: str) -> str:
+    """
+    Co-occurrence index ve parser için metni yalınlaştırır:
+    - Türkçe lower (tr_lower)
+    - Virgül/; gibi ayırıcıları boşluğa çevirir
+    - Birden fazla boşluğu tek boşluğa indirir
+    - Baştaki/sondaki boşlukları kırpar
+    Not: nokta (.) ve slash (/) bilgilerini (ör. 417. / fethiye/muğla) bozmayız.
+    """
+    if not s:
+        return ""
+    s = tr_lower(s)
+    s = s.replace(",", " ").replace(";", " ")
+    # Bazı Unicode boşluk anomalileri vs.
+    s = _SPACE_RE.sub(" ", s).strip()
+    return s
