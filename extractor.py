@@ -18,11 +18,10 @@ RE_MAH = re.compile(
 def find_il(norm: str) -> str:
     tokens = norm.split()
     for tok in reversed(tokens):
-        if is_il_token(tok):
-            # Kullanıcıya TitleCase döndürürken aksanını koruyamayabiliriz;
-            # en azından stringi normalize edip ilk harf büyük yapalım.
-            ct = clean_token(tok)
-            return ct.title()
+        # "fethiye/muğla" gibi birleşik tokenları da tara
+        for part in reversed(re.split(r"/", tok)):
+            if is_il_token(part):
+                return clean_token(part).title()
     return ""
 
 def find_ilce(norm: str, il: str) -> str:
@@ -30,7 +29,7 @@ def find_ilce(norm: str, il: str) -> str:
 
     # 1) 'ilçe/il' kalıbı: sağ tarafı IL olan son eşleşmeyi seç
     cand = ""
-    for m in re.finditer(r"\b([a-zçğıöşü\.\- ]+?)\s*/\s*([a-zçğıöşü\.\- ]+)\b", base):
+    for m in re.finditer(r"\b([a-zçğıöşü\.\- ]+?)\s*/\s*([a-zçğıöşü\.\- ]+)\b", base, flags=re.I):
         left_raw  = m.group(1).strip()
         right_raw = m.group(2).strip()
         if is_il_token(right_raw):
@@ -42,9 +41,9 @@ def find_ilce(norm: str, il: str) -> str:
     if cand:
         return cand
 
-    # 2) İl bulunduysa: 'il' kelimesinden 1–3 token sola bak, en yakını al
+    # 2) İl bulunduysa: sondaki il tokenından sola doğru en yakın anlamlı kelimeyi al
     if il:
-        parts = base.split()
+        parts   = base.split()
         il_norm = clean_token(il).lower()
         idxs = [i for i, t in enumerate(parts) if is_il_token(t)]
         for idx in reversed(idxs):
@@ -54,7 +53,7 @@ def find_ilce(norm: str, il: str) -> str:
             while j >= 0:
                 ct = clean_token(parts[j])
                 if ct and not ct.isdigit() and not is_il_token(ct) and ct not in STOPWORDS_BACK:
-                    return ct.title()
+                    return ct.title()  # örn. ... Konak İzmir -> Konak
                 j -= 1
     return ""
 
