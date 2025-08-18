@@ -1,0 +1,28 @@
+Akarca Mah. Adnan Menderes Cad. 864.Sok. No:15 D.1 K.2 .,8831
+
+
+address,label,normalized,il,ilce,mahalle,sokak,cadde,no,kat,daire,blok,site,apartman
+
+address = Akarca Mah. Adnan Menderes Cad. 864.Sok. No:15 D.1 K.2 .
+label = 8831
+normalized = akarca mahallesi. adnan menderes caddesi. 864.sokak. no 15 d1 k.2 .
+il = none
+ilce = none
+mahalle = Akarca
+sokak = none
+cadde = akarca mahallesi. adnan menderes
+no = 15
+kat = none
+daire = 1
+blok = none
+site = none
+apartman = none
+
+burada benim gördüğüm hata ve eksikler:
+1) cadde kısmına sadece adnan menderes yazılmalıydı
+2) sokak ismi 864. sokak bu sokak ismi bulunmalıydı bu konum mevcut sonuçta
+3) no 15 doğru bulunmuş daire 1 d doğru bulunmuş ama kat 2 bulunamamış
+4) adreslerde sıra doğru gelicek diye bir kaide yok vatandaş adresinde sokağı mahelleden önce veya daireyi kattan önce yabailir bunları bizim ayırt etmemiz lazım
+5) mahallesi ve sokağı bilinen adreslerden biz il ve ilçeyi bulabiliriz bunu kendimiz bulalım kod içinde uygun bağlantıyı sağlayıp
+
+bu durumlara teker teker gerekirse adım adım atlamadan bakalım

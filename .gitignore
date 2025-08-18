@@ -1,0 +1,22 @@
+@"
+# venv
+.venv/
+venv/
+
+# python cache
+__pycache__/
+*.pyc
+
+# OS / IDE
+.DS_Store
+*.log
+
+# data (büyük datasetleri commit etme)
+data/
+*.csv
+!sample_*.csv      # istersen ufak örnekleri tut
+
+# outputs
+parsed.csv
+outputs/
+"@ | Out-File -Encoding utf8 .gitignore
