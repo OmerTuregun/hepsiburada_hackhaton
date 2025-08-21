@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 import re
 from utils import ILLER, ANCHOR_WORDS, STOPWORDS_BACK, clean_token, is_stop, unique_collapse, is_il_token
-from normalizer import normalize_text
+from normalizer import normalize_text, normalize
 
 # Regexler
 RE_NO    = re.compile(r"\bno\s*([0-9]+(?:/[0-9a-z]+)?|[0-9]+[a-z]?)\b", re.I)
 RE_KAT   = re.compile(r"\bkat\s*([0-9]+)\b", re.I)
 RE_KAT_K = re.compile(r"\bk\s*[:\.]?\s*([0-9]+)\b", re.I)
 RE_DAIRE = re.compile(r"\bd\s*([0-9]+[a-z]?)\b", re.I)
+RE_BELEDIYE = re.compile(r"\b([a-zçğıöşü0-9\.\- ]+?)\s+belediyesi\b", re.I)
 RE_BLOK  = re.compile(r"\b([a-zçğıöşü]{1,2})\s*blok\b", re.I)
 RE_SITE  = re.compile(r"\b([a-zçğıöşü0-9\s\-]+?)\s+sitesi\b", re.I)
 RE_APT = re.compile(r"\b([a-zçğıöşü0-9\s\-]+?)\s+apartman(?:ı|i)?\b", re.I)
@@ -15,6 +16,13 @@ RE_MAH = re.compile(
     r"\b([a-zçğıöşü0-9\.\-]+(?:\s+[a-zçğıöşü0-9\.\-]+)*)\s+mahallesi\b",
     re.I
 )
+
+# İlçe adayında kesinlikle istemediğimiz kelimeler
+ILCE_NOISE = {
+    "yeni","sanayi","osb","organize","mevkii","mevkisi","bölgesi","bolgesi",
+    "daire","blok","site","sitesi","apartman","apartmanı","no","kat","d","k",
+    "mahallesi","mah","mh","m"
+}
 
 # Gürültü (POI) kelimeleri: ilçe fallback'te atlanacak
 POI_NOISE = {
@@ -34,7 +42,12 @@ def find_il(norm: str) -> str:
 
 def find_ilce(norm: str, il: str) -> str:
     base = re.sub(r"\([^)]*\)", " ", norm)
-
+    
+    m_bel = re.search(r"\b([a-zçğıöşü]+)\s+belediyesi\b", base)
+    if m_bel:
+        cand = clean_token(m_bel.group(1))
+        if cand and not is_il_token(cand):
+            return cand.title()
     # 0) Token bazlı hızlı tarama: "X/Y" veya "X / Y"
     parts = base.split()
     # a) Tek token içinde slash: "fethiye/muğla"
@@ -69,24 +82,33 @@ def find_ilce(norm: str, il: str) -> str:
     if cand:
         return cand
 
-    # 2) Fallback: sonda bulunan 'İl' tokenından sola yürü
+        # 2) Fallback: sonda bulunan 'İl' tokenından sola yürü
     if il:
         il_norm = clean_token(il).lower()
         for idx in reversed(range(len(parts))):
             if is_il_token(parts[idx]) and clean_token(parts[idx]).lower() == il_norm:
                 j = idx - 1
                 while j >= 0:
-                    raw = parts[j]
-                    ct  = clean_token(raw)
+                    raw  = parts[j]
+                    ct   = clean_token(raw)
                     prev = clean_token(parts[j-1]) if j-1 >= 0 else ""
-                    if ct and not ct.isdigit() and not is_il_token(ct) and ct not in STOPWORDS_BACK and ct not in POI_NOISE and prev not in POI_NOISE:
-                        # "fethiye/muğla" gibi burada da yakalayalım
-                        if "/" in raw:
-                            subs = [clean_token(s) for s in raw.split("/")]
-                            for sub in reversed(subs):
-                                if sub and not is_il_token(sub) and sub not in STOPWORDS_BACK and sub not in POI_NOISE:
-                                    return sub.title()
-                        return ct.title()
+
+                    # filtre: kısa/tek harf/numara/stop/noise
+                    if not ct or ct.isdigit() or len(ct) < 3:
+                        j -= 1; continue
+                    if ct in ILCE_NOISE or prev in ILCE_NOISE:
+                        j -= 1; continue
+                    if is_il_token(ct):
+                        j -= 1; continue
+
+                    # "fethiye/muğla" benzeri birleşikler
+                    if "/" in raw:
+                        subs = [clean_token(s) for s in raw.split("/")]
+                        for sub in reversed(subs):
+                            if sub and len(sub) >= 3 and sub not in ILCE_NOISE and not is_il_token(sub):
+                                return sub.title()
+
+                    return ct.title()
                     j -= 1
     return ""
 
@@ -188,7 +210,7 @@ def parse_address(text: str) -> dict:
     }
     """
     raw = (text or "").strip()
-    norm = normalize_text(raw)
+    norm = normalize(raw)
 
     out = {
         "address": raw,
