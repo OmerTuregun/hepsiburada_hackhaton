@@ -1,84 +1,115 @@
-# train_ml_resolver.py
-# -*- coding: utf-8 -*-
-import csv, argparse, os, joblib
-from typing import Dict, List
-from sklearn.feature_extraction.text import TfidfVectorizer
+# train_ml_resolver.py  — parse tabanlı eğitim (opsiyonel resolver desteği)
+import argparse, csv, joblib, numpy as np
+from collections import Counter
 from sklearn.pipeline import Pipeline
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
-from extractor import parse_address  # mevcut parser'ı kullanıyoruz
-from normalizer import normalize_text
+from sklearn.feature_extraction.text import HashingVectorizer
+from sklearn.linear_model import SGDClassifier
 
-def pick_address_field(row: Dict[str,str]) -> str:
-    for k in ("address","Address","adres"):
-        if k in row and row[k]:
-            return row[k]
-    return ""
+from normalizer import normalize
+from extractor import parse_address
+from resolver import LocationResolver
 
-def make_feat(parsed: Dict[str,str]) -> str:
-    # Basit ama etkili: alan etiketleriyle birleştirip TF-IDF (char n-gram) besliyoruz
-    parts = []
-    for f in ("mahalle","cadde","sokak","site","apartman"):
-        v = (parsed.get(f) or "").strip()
-        if v:
-            parts.append(f"{f}={normalize_text(v)}")
-    txt = " | ".join(parts)
-    return txt if txt else ""
+def rows(path):
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        yield from csv.DictReader(f)
+
+def pick_addr(r):
+    return r.get("address") or r.get("Address") or r.get("adres") or ""
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", required=True)
-    ap.add_argument("--output", default="cache/ml_resolver.joblib")
-    ap.add_argument("--test-size", type=float, default=0.1)
-    ap.add_argument("--min-samples", type=int, default=5, help="Seyrek sınıfları filtrelemek için alt sınır")
+    ap.add_argument("--input", required=True, help="CSV (address/adres sütunu olmalı)")
+    ap.add_argument("--output", required=True, help="Kaydedilecek model yolu (joblib)")
+    ap.add_argument("--kb", default="", help="(Opsiyonel) resolver index dosyası")
+    ap.add_argument("--resolver-threshold", type=float, default=1.0,
+                    help="Resolver skor eşiği (vars: 1.0)")
+    ap.add_argument("--sample", type=int, default=0, help="İsteğe bağlı örnek sınırı")
     args = ap.parse_args()
 
-    X, y = [], []
-    with open(args.input, "r", encoding="utf-8", newline="") as f:
-        rdr = csv.DictReader(f)
-        for row in rdr:
-            addr = pick_address_field(row)
-            if not addr: 
-                continue
-            p = parse_address(addr)
-            # Etiket: (il|ilçe). İl olmak ZORUNLU, ilçe boş olabilir.
-            il = (p.get("il") or "").strip()
-            if not il: 
-                continue
-            ilce = (p.get("ilce") or "").strip()
-            label = f"{il}|{ilce}"
-            feat = make_feat(p)
-            if not feat:
-                continue
-            X.append(feat); y.append(label)
+    # (Opsiyonel) co-occurrence resolver
+    resolver = LocationResolver.load(args.kb) if args.kb else None
+    use_resolver = resolver is not None
 
-    # Sınıf sayacı ve seyrek sınıf filtresi
-    from collections import Counter
-    cnt = Counter(y)
-    keep_mask = [cnt[lab] >= args.min_samples for lab in y]
-    X = [x for x, m in zip(X, keep_mask) if m]
-    y = [lab for lab, m in zip(y, keep_mask) if m]
+    X, y = [], []
+    total, used = 0, 0
+
+    for r in rows(args.input):
+        total += 1
+        addr = pick_addr(r)
+        if not addr:
+            continue
+
+        # 1) Adresi ayrıştır
+        p = parse_address(addr)
+
+        il   = (p.get("il") or "").strip().title()
+        ilce = (p.get("ilce") or "").strip().title()
+
+        # 2) Gerekirse resolver ile eksikleri tamamla (yüksek skor şart)
+        if use_resolver and (not il or not ilce):
+            il_res, ilce_res, score = resolver.infer(
+                mahalle=p.get("mahalle"),
+                sokak=p.get("sokak"),
+                cadde=p.get("cadde"),
+                site=p.get("site"),
+                apartman=p.get("apartman"),
+                il_hint=il or None,
+                ilce_hint=ilce or None
+            )
+            if score >= args.resolver_threshold:
+                il   = il   or il_res
+                ilce = ilce or ilce_res
+
+        # 3) Yine de ikisi de yoksa, bu satırı eğitimde kullanma
+        if not il or not ilce:
+            continue
+
+        X.append(normalize(addr))
+        y.append(f"{il}|{ilce}")
+        used += 1
+
+        if args.sample and used >= args.sample:
+            break
 
     if not X:
-        print("Yeterli eğitim örneği yok.")
-        return
+        raise SystemExit(
+            "Eğitim için örnek bulunamadı. Nedeni genelde: "
+            "CSV'de adreslerden il/ilçe çıkarılamadı. "
+            "Çözüm: --kb ile resolver ver veya verisetinde il/ilçe geçen adresleri kullan."
+        )
 
-    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=args.test_size, random_state=42, stratify=y)
-
+    # Hafif & bellek dostu boru hattı
     pipe = Pipeline([
-        ("vec", TfidfVectorizer(analyzer="char", ngram_range=(3,5), min_df=3)),
-        ("clf", LogisticRegression(max_iter=300, n_jobs=-1, verbose=0, multi_class="auto")),
+        ("vec", HashingVectorizer(
+            analyzer="char_wb",
+            ngram_range=(3,5),
+            n_features=2**20,
+            alternate_sign=False,
+            norm="l2",
+            dtype=np.float32
+        )),
+        ("clf", SGDClassifier(
+            loss="log_loss",
+            penalty="l2",
+            alpha=1e-4,
+            max_iter=25,
+            n_jobs=-1,
+            random_state=42
+        )),
     ])
-    pipe.fit(Xtr, ytr)
 
-    ypred = pipe.predict(Xte)
-    acc = accuracy_score(yte, ypred)
-    print(f"[eval] pair(top-1) accuracy = {acc:.3f}  (sınıf sayısı: {len(set(y))})")
-
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    pipe.fit(X, y)
     joblib.dump(pipe, args.output)
-    print(f"[save] {args.output}")
+
+    # Kısa özet
+    cls = Counter(y)
+    print(f"[ok] saved -> {args.output}")
+    print(f"[stats] total_rows={total}  used_for_training={used}  classes={len(cls)}")
+    most = cls.most_common(10)
+    if most:
+        print("[top-classes]")
+        for k, c in most:
+            print(f"  {k}: {c}")
 
 if __name__ == "__main__":
     main()
